@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pulse Report Builder</title>
+<style>
+:root{--bg:#f5f4fb;--surface:#fff;--ink:#1d1b3a;--muted:#5f5c7d;--line:#e2dff0;--accent:#5b3fd6;--accent-2:#e2448a;
+--crit:#e0413a;--high:#ef7d1a;--med:#b88a00;--ok:#159a6b;--drop:#efeafe}
+@media (prefers-color-scheme:dark){:root{--bg:#13122a;--surface:#1d1b3a;--ink:#ecebf8;--muted:#a6a3c6;--line:#34315c;--accent:#9d87ff;--accent-2:#ff6fab;
+--crit:#ff6b63;--high:#ffa04d;--med:#f0c53a;--ok:#3fd09a;--drop:#25224a;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "Segoe UI",system-ui,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:28px max(16px,env(safe-area-inset-right,0px)) 40px max(16px,env(safe-area-inset-left,0px))}
+header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+h1{margin:0;font-size:1.6rem;background:linear-gradient(90deg,var(--accent),var(--accent-2));-webkit-background-clip:text;background-clip:text;color:transparent}
+header p{margin:0;color:var(--muted)}
+.drop{display:block;border:2px dashed var(--accent);border-radius:16px;background:var(--drop);padding:34px 20px;text-align:center;cursor:pointer;transition:transform .15s}
+.drop.over{transform:scale(1.01);border-style:solid}
+.drop b{display:block;font-size:1.15rem;margin-bottom:4px}
+.drop span{color:var(--muted)}
+.drop input{position:absolute;width:1px;height:1px;opacity:0}
+.drop:focus-within{outline:3px solid var(--accent-2);outline-offset:3px}
+.status{margin:16px 0 0;min-height:1.5em;color:var(--muted)}
+.status.err{color:var(--crit);font-weight:600}
+.result{display:grid;grid-template-columns:320px 1fr;gap:18px;margin-top:18px}
+.result[hidden]{display:none}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px;min-width:0}
+.card h2{margin:0 0 10px;font-size:1.05rem}
+.counts{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.counts span{padding:4px 10px;border-radius:999px;font-size:.82rem;font-weight:600;color:#fff}
+.btns{display:grid;gap:8px;margin-bottom:16px}
+button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:10px 14px;cursor:pointer;background:var(--accent);color:#fff}
+button.alt{background:transparent;color:var(--accent);border:1.5px solid var(--accent)}
+button:focus-visible{outline:3px solid var(--accent-2);outline-offset:2px}
+.map{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:.82rem}
+.map li{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid var(--line);padding:4px 0}
+.map li span:last-child{color:var(--muted);text-align:right;overflow-wrap:anywhere}
+.map li.miss span:first-child{color:var(--muted)}
+.map li.hit span:first-child::before{content:"✓ ";color:var(--ok)}
+.map li.miss span:first-child::before{content:"– ";}
+iframe{width:100%;height:78vh;border:1px solid var(--line);border-radius:14px;background:#fff}
+@media (max-width:860px){.result{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Pulse Report Builder</h1>
+    <p>Turns an M365 Pulse Report workbook into a security report page. Everything runs on this computer.</p>
+  </header>
+
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept=".xlsx">
+    <b>Drop an .xlsx workbook here</b>
+    <span>or click to choose a file</span>
+  </label>
+  <p class="status" id="status" role="status"></p>
+
+  <div class="result" id="result" hidden>
+    <aside class="card">
+      <h2 id="tenant"></h2>
+      <div class="counts" id="counts"></div>
+      <div class="btns">
+        <button id="save">Save HTML report</button>
+        <button class="alt" id="open">Open in new tab</button>
+      </div>
+      <h2>Sheets recognised</h2>
+      <ul class="map" id="map"></ul>
+    </aside>
+    <iframe id="preview" title="Report preview"></iframe>
+  </div>
+</div>
+
+<script src="pulse-engine.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let current = null;
+
+async function handle(file) {
+  if (!file) return;
+  $('status').className = 'status';
+  $('status').textContent = `Reading ${file.name}…`;
+  try {
+    const { html, model } = await PulseEngine.buildReport(await file.arrayBuffer(), file.name);
+    current = { html, name: file.name.replace(/\.xlsx?$/i, '') + '.html' };
+    const n = s => model.findings.filter(f => f.sev === s).length;
+    $('tenant').textContent = model.tenant;
+    $('counts').innerHTML = [['Critical', n('crit'), 'var(--crit)'], ['High', n('high'), 'var(--high)'], ['Medium', n('med'), 'var(--med)']]
+      .map(([l, c, col]) => `<span style="background:${col}">${c} ${l}</span>`).join('');
+    const rows = model.mapping.map(m => ({ hit: !!m.sheet, label: m.label, sheet: m.sheet || 'not found' }));
+    if (model.checks.length) rows.push({ hit: true, label: 'Tenant setting checks', sheet: `${model.checks.length} sheets` });
+    $('map').replaceChildren(...rows.map(r => {
+      const li = document.createElement('li');
+      li.className = r.hit ? 'hit' : 'miss';
+      li.innerHTML = '<span></span><span></span>';
+      li.children[0].textContent = r.label;
+      li.children[1].textContent = r.sheet;
+      return li;
+    }));
+    $('preview').srcdoc = html;
+    $('result').hidden = false;
+    $('status').textContent = `Report built from ${model.sheetCount} sheets.`;
+  } catch (e) {
+    $('result').hidden = true;
+    $('status').className = 'status err';
+    $('status').textContent = `Could not read this file: ${e.message}`;
+  }
+}
+
+function blobUrl() { return URL.createObjectURL(new Blob([current.html], { type: 'text/html' })); }
+
+$('file').addEventListener('change', e => handle(e.target.files[0]));
+$('save').addEventListener('click', () => {
+  const a = document.createElement('a');
+  a.href = blobUrl(); a.download = current.name; a.click();
+  $('status').textContent = `Saved ${current.name} to your Downloads folder.`;
+});
+$('open').addEventListener('click', () => window.open(blobUrl(), '_blank'));
+
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => handle(e.dataTransfer.files[0]));
+</script>
+</body>
+</html>
